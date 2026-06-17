@@ -10,24 +10,23 @@ completely different platform (a JSF app), so it has its own scraping logic here
 Flow
 ----
 1. Load the region-contract-map page once in headless Chromium (Playwright).
-2. For each requested region (Central / West / Eastern), click the region tab,
-   wait for the contract table to re-render (JSF server postback — no distinct
-   URL per region), and scrape every row's contract-detail link.
+2. Discover contract-detail links. The page is a "contracts by region map", so
+   contracts may already be listed on load, or may require clicking a region to
+   reveal a table (JSF server postback — no distinct URL per region). We handle
+   both: scan for links on load, and also try clicking each requested region.
 3. Visit each contract's detail page (a stable GET-able contractView.jsf?id=URL)
    and extract the scope fields. Volume is tiny (~4-6 per region, ~12-18 total,
-   single page, no pagination), so we visit every contract rather than
-   pre-filtering from the list rows.
+   single page, no pagination), so we visit every contract.
 
 Politeness: detail-page visits are throttled by ``rate_limit_seconds`` (same
 crawl setting as the municipal collector). We read public pages only and never
 download bid documents (those require login).
 
-NOTE on page-structure assumptions: the live RAQS HTML/label structure could not
-be byte-verified at build time (the site 403s anonymous non-browser clients).
-The region-tab selectors and the detail-page field labels below are therefore
-best-effort and resilient (multiple label aliases, defensive fallbacks), but
-they MUST be sanity-checked against the live site on the first real run — every
-such assumption is flagged with an ``ASSUMPTION:`` comment.
+NOTE on page-structure assumptions: the live RAQS HTML could not be byte-verified
+at build time (the site 403s anonymous non-browser clients). The selectors and
+field labels below are best-effort; when a region yields no rows the collector
+dumps the live page structure (``RAQS DIAG`` log lines) so the real DOM can be
+read off a dry-run and the selectors tightened.
 
 # TODO (phase 2b): the per-contract Item List (bulletin/articleView.jsf?articleId=...)
 # lists individual line items including pavement-marking spec codes — a stronger
@@ -47,8 +46,10 @@ from src.storage.models import Tender
 
 logger = logging.getLogger(__name__)
 
-_CONTRACT_LINK_SELECTOR = "a[href*='contractView.jsf']"
-_CONTRACT_ID_RE = re.compile(r"[?&]id=([^&#]+)", re.IGNORECASE)
+_CONTRACT_ID_RE = re.compile(r"[?&](?:id|contractId|contract_id)=([^&#]+)", re.IGNORECASE)
+# How long to wait for a region's table to settle after a click (kept short so a
+# misfiring selector doesn't stall the whole run for the full nav timeout).
+_TABLE_WAIT_MS = 8000
 
 
 # ── Date parsing ────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
 _KNOWN_LABELS = [
     "Contract Number", "Contract No", "Contract #",
     "Tender Owner", "Contract Type", "Owner",
+    "Region", "MTO Region",
     "Location", "Highway", "Length",
     "Contract Description", "Description",
     "Classification of Work", "Classification",
@@ -122,6 +124,15 @@ def _extract_field(text: str, labels: list[str]) -> str:
     lines = [ln.strip() for ln in text.splitlines()]
     other_labels = [lbl.lower() for lbl in _KNOWN_LABELS]
 
+    def _is_label_line(s_low: str) -> bool:
+        # A line counts as the next field's label only if it IS a known label or a
+        # "label:" prefix — NOT merely starts with the word (so a value like
+        # "Region of Durham" is not mistaken for the short "Region" label).
+        return any(
+            s_low == ol or s_low == ol + ":" or s_low.startswith(ol + ":")
+            for ol in other_labels
+        )
+
     for i, line in enumerate(lines):
         low = line.lower()
         for label in labels:
@@ -139,7 +150,7 @@ def _extract_field(text: str, labels: list[str]) -> str:
                         if collected:
                             break
                         continue
-                    if any(nxt.lower().startswith(ol) for ol in other_labels):
+                    if _is_label_line(nxt.lower()):
                         break
                     collected.append(nxt)
                     # Descriptions can span lines; single-value fields are one line.
@@ -150,52 +161,104 @@ def _extract_field(text: str, labels: list[str]) -> str:
     return ""
 
 
+# ── Link discovery (frame-aware) ──────────────────────────────────────────────
+
+def _collect_contract_links(page) -> list[tuple[str, str]]:
+    """
+    Find contract-detail links across ALL frames on the page (the contract table
+    may be rendered inside an iframe). Returns [(absolute_url, row_text), ...].
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for fr in page.frames:
+        try:
+            anchors = fr.query_selector_all("a")
+        except Exception:
+            continue
+        for a in anchors:
+            href = a.get_attribute("href") or ""
+            low = href.lower()
+            is_contract = "contractview" in low or (
+                "contract" in low and _CONTRACT_ID_RE.search(href)
+            )
+            if not is_contract:
+                continue
+            abs_url = urljoin(fr.url, href)
+            if abs_url in seen:
+                continue
+            seen.add(abs_url)
+            out.append((abs_url, (a.inner_text() or "").strip()))
+    return out
+
+
+def _dump_diagnostics(page, label: str) -> None:
+    """Log the live page structure so the real DOM can be read off a dry-run."""
+    try:
+        logger.warning(
+            "RAQS DIAG [%s]: title=%r url=%r frames=%d",
+            label, page.title(), page.url, len(page.frames),
+        )
+    except Exception:
+        pass
+    for i, fr in enumerate(page.frames):
+        try:
+            hrefs = [(a.get_attribute("href") or "") for a in fr.query_selector_all("a")]
+            contractish = sorted({h for h in hrefs if "contract" in h.lower()})
+            logger.warning(
+                "RAQS DIAG [%s]: frame[%d] url=%r anchors=%d contract_hrefs(%d)=%s",
+                label, i, fr.url, len(hrefs), len(contractish), contractish[:15],
+            )
+        except Exception as exc:
+            logger.warning("RAQS DIAG [%s]: frame[%d] inspect failed: %s", label, i, exc)
+    try:
+        srcs = [(f.get_attribute("src") or "") for f in page.query_selector_all("iframe")]
+        if srcs:
+            logger.warning("RAQS DIAG [%s]: iframe srcs=%s", label, srcs[:10])
+    except Exception:
+        pass
+    try:
+        body = re.sub(r"\s+", " ", page.inner_text("body"))
+        logger.warning("RAQS DIAG [%s]: body text[:700]=%s", label, body[:700])
+    except Exception:
+        pass
+
+
 # ── Playwright scraping ───────────────────────────────────────────────────────
 
-def _scrape_region_links(page, region: str, timeout_ms: int) -> list[tuple[str, str]]:
-    """
-    Click the region tab and return [(detail_url, row_text), ...] for that region.
-    Returns [] if the region tab or table cannot be found.
-    """
-    # ASSUMPTION: each region is a clickable element whose visible text is the
-    # region name. Try a few strategies (link role, generic text) before giving up.
-    clicked = False
+def _click_region(page, region: str) -> bool:
+    """Try to click the control for a region. Returns True if something was clicked."""
+    # ASSUMPTION: the region is a clickable element whose visible text is the
+    # region name. Try a few strategies before giving up.
     for selector in (
         f"a:has-text(\"{region}\")",
+        f"button:has-text(\"{region}\")",
         f"text=\"{region}\"",
         f":text(\"{region}\")",
     ):
         try:
             el = page.locator(selector).first
             if el.count() > 0:
-                el.click(timeout=timeout_ms)
-                clicked = True
-                break
-        except Exception as exc:  # selector miss / not clickable — try the next
+                el.click(timeout=_TABLE_WAIT_MS)
+                return True
+        except Exception as exc:
             logger.debug("RAQS: region %s selector %r failed: %s", region, selector, exc)
-    if not clicked:
-        logger.warning("RAQS: could not find a clickable tab for region %s", region)
-        return []
+    return False
 
-    # Wait for the contract table (rows linking to contractView.jsf) to render
-    # after the JSF postback, rather than sleeping a fixed amount.
+
+def _scrape_region_links(page, region: str) -> list[tuple[str, str]]:
+    """Click the region control, let it settle, and return its contract links."""
+    if not _click_region(page, region):
+        logger.warning("RAQS: could not find a clickable control for region %s", region)
+        return []
     try:
-        page.wait_for_selector(_CONTRACT_LINK_SELECTOR, timeout=timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=_TABLE_WAIT_MS)
     except Exception:
+        pass
+    links = _collect_contract_links(page)
+    if not links:
         logger.warning("RAQS: no contract rows appeared for region %s", region)
+        _dump_diagnostics(page, f"region={region}")
         return []
-
-    links: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for a in page.query_selector_all(_CONTRACT_LINK_SELECTOR):
-        href = a.get_attribute("href") or ""
-        if not href or "contractView.jsf" not in href:
-            continue
-        abs_url = urljoin(page.url, href)
-        if abs_url in seen:
-            continue
-        seen.add(abs_url)
-        links.append((abs_url, (a.inner_text() or "").strip()))
     logger.info("RAQS: region %s — %d contract rows", region, len(links))
     return links
 
@@ -212,6 +275,7 @@ def _scrape_detail(page, detail_url: str, timeout_ms: int) -> dict:
     return {
         "contract_no":    _extract_field(text, ["Contract Number", "Contract No", "Contract #"]),
         "contract_type":  _extract_field(text, ["Tender Owner", "Contract Type", "Owner"]),
+        "region_field":   _extract_field(text, ["Region", "MTO Region"]),
         "location":       _extract_field(text, ["Location"]),
         "highway":        _extract_field(text, ["Highway"]),
         "length":         _extract_field(text, ["Length"]),
@@ -232,6 +296,9 @@ def _build_tender(fields: dict, region: str, detail_url: str, source_id: str) ->
     if not contract_no:
         logger.warning("RAQS: skipping contract with no number/id at %s", detail_url)
         return None
+
+    # Prefer the region we navigated under; fall back to the detail-page field.
+    region = (region or "").strip() or fields.get("region_field", "").strip() or "Unknown"
 
     classification = fields.get("classification", "").strip()
     location = fields.get("location", "").strip()
@@ -306,6 +373,7 @@ def collect_raqs(
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
     timeout_ms = timeout_seconds * 1000
+    allowed = {r.strip().lower() for r in regions}
     tenders: list[Tender] = []
 
     with sync_playwright() as pw:
@@ -315,7 +383,7 @@ def collect_raqs(
 
         # Load the region map robustly. The site has shown a transient
         # "An error occurred while executing an action" banner on first load,
-        # so retry once if the contract table never appears.
+        # so retry once if the page never settles.
         loaded = False
         for attempt in range(2):
             try:
@@ -330,22 +398,39 @@ def collect_raqs(
             browser.close()
             raise RuntimeError("RAQS region map page failed to load")
 
-        # Collect contract links per region first (each region is a tab postback).
-        region_links: list[tuple[str, str, str]] = []  # (region, url, row_text)
+        # Always dump the structure once so a dry-run reveals the real DOM.
+        _dump_diagnostics(page, "initial-load")
+
+        # url -> region. Two discovery strategies, in order:
+        link_region: dict[str, str] = {}
+
+        # (a) Contracts already listed on load (region unknown -> from detail page).
+        for url, _txt in _collect_contract_links(page):
+            link_region.setdefault(url, "")
+        if link_region:
+            logger.info("RAQS: %d contract links visible on initial load (pre-click)", len(link_region))
+
+        # (b) Per-region tab/postback: click each requested region and re-scan.
         for region in regions:
             try:
-                for url, row_text in _scrape_region_links(page, region, timeout_ms):
-                    region_links.append((region, url, row_text))
+                for url, _txt in _scrape_region_links(page, region):
+                    # A region click attributes its links to that region (overrides "").
+                    link_region[url] = region
             except Exception as exc:
                 logger.error("RAQS: failed to scrape region %s: %s", region, exc)
 
-        logger.info("RAQS: %d total contracts across %s", len(region_links), ", ".join(regions))
+        logger.info("RAQS: %d candidate contracts discovered", len(link_region))
 
         # Visit each contract detail page (throttled — be polite to a gov site).
-        for region, url, _row_text in region_links:
+        for url, region in link_region.items():
             try:
                 fields = _scrape_detail(page, url, timeout_ms)
-                tender = _build_tender(fields, region, url, source_id)
+                eff_region = (region or fields.get("region_field", "")).strip()
+                # Filter to requested regions when we can determine the region.
+                if allowed and eff_region and eff_region.lower() not in allowed:
+                    logger.info("RAQS: skipping %s — region %r not in %s", url, eff_region, regions)
+                    continue
+                tender = _build_tender(fields, eff_region, url, source_id)
                 if tender:
                     tenders.append(tender)
             except Exception as exc:
