@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import yaml
 
 from src.collectors.bidsandtenders import collect
+from src.collectors.raqs import collect_raqs
 from src.dashboard.build import build
 from src.matching.relevance import adjudicate
 from src.notifications.slack import post_match
@@ -51,12 +52,23 @@ def run(args: argparse.Namespace) -> None:
     llm_cfg       = settings_cfg["llm"]
     storage_cfg   = settings_cfg["storage"]
     dashboard_cfg = settings_cfg["dashboard"]
+    raqs_cfg      = settings_cfg.get("raqs", {})
     db_path = storage_cfg.get("db_path", "")
+
+    raqs_source_id = raqs_cfg.get("source_id", "raqs")
+
+    # RAQS runs when no --source filter is given, or when --source raqs is requested.
+    run_raqs = raqs_cfg.get("enabled", False) and (
+        args.source is None or args.source == raqs_source_id
+    )
 
     if not args.dry_run:
         init_db(db_path)
 
-    if args.source:
+    if args.source == raqs_source_id:
+        # RAQS-only debug run — skip the municipal loop entirely.
+        sources = []
+    elif args.source:
         sources = [s for s in sources if s["id"] == args.source]
         if not sources:
             logger.error("Unknown source id: %s", args.source)
@@ -152,6 +164,98 @@ def run(args: argparse.Namespace) -> None:
             "%s: %d tenders | %d new | %d matched | %d already decided",
             source["name"], len(tenders), new_count, matched_count, skipped_count,
         )
+        total_new     += new_count
+        total_matched += matched_count
+        total_skipped += skipped_count
+
+    # ── Second data source: MTO RAQS ────────────────────────────────────────────
+    # Runs AFTER all municipal sources, in the same pipeline run, reusing the same
+    # DB / adjudication / Slack. Wrapped in its own try/except mirroring the
+    # per-source fault isolation above: a RAQS/Playwright failure logs an error,
+    # appends to failed_sources, and lets the run finish (municipal results already
+    # stored, dashboard still builds).
+    if run_raqs:
+        try:
+            raqs_tenders = collect_raqs(
+                region_map_url=raqs_cfg["region_map_url"],
+                regions=raqs_cfg["regions"],
+                user_agent=crawl["user_agent"],
+                source_id=raqs_source_id,
+                rate_limit_seconds=crawl["rate_limit_seconds"],
+                timeout_seconds=crawl["timeout_seconds"],
+            )
+        except Exception as exc:
+            logger.error("Unhandled error collecting RAQS: %s", exc)
+            failed_sources.append(raqs_source_id)
+            raqs_tenders = []
+
+        new_count     = 0
+        matched_count = 0
+        skipped_count = 0
+
+        for tender in raqs_tenders:
+            region = tender.raw.get("region", "")
+            tag = f"MTO — {region}" if region else "MTO"
+
+            if args.dry_run:
+                decision, reason = adjudicate(
+                    title=tender.title,
+                    description=tender.description,
+                    bid_categories=tender.bid_categories,
+                    model=llm_cfg["model"],
+                    max_tokens=llm_cfg["max_tokens"],
+                )
+                if decision in ("yes", "maybe"):
+                    matched_count += 1
+                    logger.info(
+                        "DRY-RUN [%s]: %s — %s | %s",
+                        decision.upper(), tender.source_name, tender.title, reason or "",
+                    )
+                continue
+
+            with get_connection(db_path) as conn:
+                is_new, has_decision = upsert_tender(conn, tender)
+
+                if is_new:
+                    new_count += 1
+
+                if has_decision:
+                    skipped_count += 1
+                    continue
+
+                decision, reason = adjudicate(
+                    title=tender.title,
+                    description=tender.description,
+                    bid_categories=tender.bid_categories,
+                    model=llm_cfg["model"],
+                    max_tokens=llm_cfg["max_tokens"],
+                )
+
+                if decision:
+                    save_llm_decision(conn, tender.id, decision, llm_cfg["model"], reason)
+                    if decision in ("yes", "maybe"):
+                        matched_count += 1
+                        logger.info(
+                            "MATCH [%s]: %s — %s",
+                            decision.upper(), tender.source_name, tender.title[:80],
+                        )
+                        if is_new:
+                            post_match(
+                                title=tender.title,
+                                source_name=tender.source_name,
+                                detail_url=tender.detail_url,
+                                decision=decision,
+                                closing_date=tender.closing_date,
+                                reference_no=tender.reference_no,
+                                reason=reason,
+                                tag=tag,
+                            )
+
+        if not args.dry_run:
+            logger.info(
+                "MTO RAQS: %d contracts | %d new | %d matched | %d already decided",
+                len(raqs_tenders), new_count, matched_count, skipped_count,
+            )
         total_new     += new_count
         total_matched += matched_count
         total_skipped += skipped_count

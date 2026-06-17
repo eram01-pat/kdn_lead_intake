@@ -16,6 +16,17 @@ storage:
   # db_path unused — Neon connection comes from DATABASE_URL environment variable.
   db_path: ""
 
+# Second data source: MTO RAQS contracts (public Ontario MTO / MERX RAQS site).
+# Different platform from bids&tenders — driven by its own collector (src/collectors/raqs.py),
+# NOT listed in sources.yaml. Runs after the municipal sources in the same pipeline run.
+raqs:
+  enabled: true
+  source_id: "raqs"
+  region_map_url: "https://www.raqs.merx.com/public/contract/contractsByRegionMap.jsf"
+  # Central and West always; Eastern included (distance call left to a human).
+  # Northwestern and Northeastern are intentionally excluded.
+  regions: [Central, West, Eastern]
+
 dashboard:
   output_path: "docs/index.html"
   closing_soon_days: 14

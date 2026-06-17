@@ -41,11 +41,16 @@ def post_match(
     closing_date=None,
     reference_no: str = "",
     reason: str | None = None,
+    tag: str | None = None,
 ) -> None:
     """
     Post a single tender match to Slack.
     decision is 'yes' or 'maybe'.
     Only called for newly-seen tenders so the team never gets duplicate alerts.
+
+    tag: optional banner prepended above the alert (e.g. "MTO — Central") so a
+    non-municipal source like MTO RAQS is instantly distinguishable. When None
+    (the municipal default), the message is byte-for-byte the original format.
     """
     url = _webhook_url()
     if not url:
@@ -58,7 +63,10 @@ def post_match(
     days = _days_until(closing_date)
     closing_soon = days is not None and 0 <= days <= CLOSING_SOON_DAYS
 
-    lines = [f"{emoji} *NEW TENDER — {confidence} Confidence*"]
+    lines = []
+    if tag:
+        lines.append(f"🛣️ *{tag}*")
+    lines.append(f"{emoji} *NEW TENDER — {confidence} Confidence*")
     lines.append(f"*{title}*")
     if reason:
         lines.append(f"_{reason}_")
