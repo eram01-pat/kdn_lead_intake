@@ -9,9 +9,10 @@ completely different platform (a JSF app), so it has its own scraping logic here
 
 Flow
 ----
-1. Load the "Contracts By Regional Map" page once in headless Chromium.
-   The page lists every open contract in one table (the region map is decorative
-   — clicking a region does NOT filter the list, confirmed against the live site).
+1. Load the "Contracts By Regional Map" page in headless Chromium. The table
+   shows one region's contracts at a time (default Northwestern); clicking a
+   region loads that region's contracts (the table accumulates). We click each
+   requested region, waiting for the table to change, and union the results.
    Contract rows link to ``contractsByRegionView.jsf?contractId=<ID>``.
 2. Visit each contract's detail page and extract the scope fields. The detail
    page carries the authoritative ``Region`` field, so region is read from there
