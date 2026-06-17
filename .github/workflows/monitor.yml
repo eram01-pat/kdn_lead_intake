@@ -7,9 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run — collect and match but skip DB write"
+        description: "Dry run — collect and adjudicate but skip DB write"
         type: boolean
         default: false
+      source:
+        description: "Limit to a single source id (e.g. raqs, vaughan). Blank = all sources."
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -45,13 +49,21 @@ jobs:
           ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
           DATABASE_URL:        ${{ secrets.DATABASE_URL }}
           SLACK_WEBHOOK_URL:   ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Read dispatch inputs via env (never interpolated into the shell directly)
+          DRY_RUN:   ${{ github.event.inputs.dry_run }}
+          SOURCE_ID: ${{ github.event.inputs.source }}
         run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          ARGS="--ignore-errors"
+          if [ "$DRY_RUN" = "true" ]; then
             echo "=== DRY RUN MODE — no DB writes ==="
-            python pipeline.py --dry-run --ignore-errors
-          else
-            python pipeline.py --ignore-errors
+            ARGS="$ARGS --dry-run"
           fi
+          if [ -n "$SOURCE_ID" ]; then
+            echo "=== Single source: $SOURCE_ID ==="
+            ARGS="$ARGS --source $SOURCE_ID"
+          fi
+          echo "Running: python pipeline.py $ARGS"
+          python pipeline.py $ARGS
 
       - name: Commit module endpoint cache
         if: github.event.inputs.dry_run != 'true'
