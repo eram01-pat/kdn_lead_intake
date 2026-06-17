@@ -40,7 +40,7 @@ import re
 import time
 from datetime import date, datetime
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from src.storage.models import Tender
 
@@ -223,6 +223,32 @@ def _dump_diagnostics(page, label: str) -> None:
         pass
 
 
+def _dump_detail_diagnostics(page, row_url: str, bulletin_url: str) -> None:
+    """
+    One-time: dump candidate contract detail pages so we can confirm which URL
+    carries clean per-contract fields and what its labels are. Compares the row
+    link (contractsByRegionView) with the canonical bulletin/contractView page.
+    """
+    candidates = [("regionView", row_url)]
+    if bulletin_url:
+        candidates.append(("bulletin", bulletin_url))
+    for label, url in candidates:
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=_TABLE_WAIT_MS)
+            except Exception:
+                pass
+            body = re.sub(r"\s+", " ", page.inner_text("body"))
+        except Exception as exc:
+            logger.warning("RAQS DETAIL DIAG [%s]: load failed %s: %s", label, url, exc)
+            continue
+        present = [lbl for lbl in _KNOWN_LABELS if re.search(re.escape(lbl), body, re.IGNORECASE)]
+        logger.warning("RAQS DETAIL DIAG [%s]: url=%s title=%r labels_present=%s",
+                       label, url, page.title(), present)
+        logger.warning("RAQS DETAIL DIAG [%s]: body[:1400]=%s", label, body[:1400])
+
+
 # ── Playwright scraping ───────────────────────────────────────────────────────
 
 def _click_region(page, region: str) -> bool:
@@ -259,7 +285,11 @@ def _scrape_region_links(page, region: str) -> list[tuple[str, str]]:
         logger.warning("RAQS: no contract rows appeared for region %s", region)
         _dump_diagnostics(page, f"region={region}")
         return []
-    logger.info("RAQS: region %s — %d contract rows", region, len(links))
+    ids = sorted({
+        (_CONTRACT_ID_RE.search(u).group(1) if _CONTRACT_ID_RE.search(u) else u)
+        for u, _ in links
+    })
+    logger.info("RAQS: region %s — %d contract rows; ids=%s", region, len(links), ids)
     return links
 
 
@@ -398,31 +428,53 @@ def collect_raqs(
             browser.close()
             raise RuntimeError("RAQS region map page failed to load")
 
-        # Always dump the structure once so a dry-run reveals the real DOM.
+        sp = urlsplit(region_map_url)
+        base = f"{sp.scheme}://{sp.netloc}"
+
+        # Always dump the map structure once so a dry-run reveals the real DOM.
         _dump_diagnostics(page, "initial-load")
 
-        # url -> region. Two discovery strategies, in order:
-        link_region: dict[str, str] = {}
-
-        # (a) Contracts already listed on load (region unknown -> from detail page).
-        for url, _txt in _collect_contract_links(page):
-            link_region.setdefault(url, "")
-        if link_region:
-            logger.info("RAQS: %d contract links visible on initial load (pre-click)", len(link_region))
-
-        # (b) Per-region tab/postback: click each requested region and re-scan.
+        # Attribute each contract to a region by clicking that region's tab and
+        # recording which contracts appear under it. First region wins; we log any
+        # contract that shows up under more than one region so we can see whether
+        # the tabs actually filter (the per-region ids= log lines reveal this).
+        region_of: dict[str, str] = {}
         for region in regions:
             try:
-                for url, _txt in _scrape_region_links(page, region):
-                    # A region click attributes its links to that region (overrides "").
-                    link_region[url] = region
+                links = _scrape_region_links(page, region)
             except Exception as exc:
                 logger.error("RAQS: failed to scrape region %s: %s", region, exc)
+                continue
+            for url, _txt in links:
+                if url in region_of and region_of[url] != region:
+                    logger.warning(
+                        "RAQS: %s appears under both %s and %s — tabs may not filter",
+                        url, region_of[url], region,
+                    )
+                region_of.setdefault(url, region)
 
-        logger.info("RAQS: %d candidate contracts discovered", len(link_region))
+        # Fallback: if no region tab yielded anything, use links present on load
+        # (region then comes from the detail page's Region field).
+        if not region_of:
+            for url, _txt in _collect_contract_links(page):
+                region_of[url] = ""
+
+        logger.info("RAQS: %d candidate contracts discovered", len(region_of))
+
+        # One-time detail-page diagnostics on the first contract.
+        if region_of:
+            first_url = next(iter(region_of))
+            m = _CONTRACT_ID_RE.search(first_url)
+            bulletin_url = (
+                f"{base}/public/bulletin/contractView.jsf?id={m.group(1)}" if m else ""
+            )
+            try:
+                _dump_detail_diagnostics(page, first_url, bulletin_url)
+            except Exception as exc:
+                logger.warning("RAQS: detail diagnostics failed: %s", exc)
 
         # Visit each contract detail page (throttled — be polite to a gov site).
-        for url, region in link_region.items():
+        for url, region in region_of.items():
             try:
                 fields = _scrape_detail(page, url, timeout_ms)
                 eff_region = (region or fields.get("region_field", "")).strip()
