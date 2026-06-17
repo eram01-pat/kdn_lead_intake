@@ -2,8 +2,8 @@
 
 ## Platform Overview
 
-All 17 DLP source municipalities run the **eSolutionsGroup bids&tenders.ca** SaaS platform.
-One collector handles all 17 sources; only `base_url` differs.
+All 25 KDN source municipalities run the **eSolutionsGroup bids&tenders.ca** SaaS platform.
+One collector handles all 25 sources; only `base_url` differs.
 
 ---
 
@@ -94,8 +94,8 @@ which are behind a document fee / login wall. We do not download these.
 
 **Consequence: matching is title-only for this platform.**
 
-This is workable because DLP-relevant tenders will have descriptive titles
-("Line Painting Services", "Pavement Marking for Municipal Parking Lots", etc.).
+This is workable because KDN-relevant tenders will have descriptive titles
+("Pavement Marking Services", "Line Painting on Regional Roads", etc.).
 The matching engine is aware of this and operates correctly on titles alone.
 
 `fetch_detail_pages` is disabled by default in `config/settings.yaml` to avoid
@@ -127,8 +127,8 @@ Provisional stance: **polite crawl of public listing + detail pages only**, per
 
 ## Generalization
 
-All 17 municipalities use the same platform. The endpoint pattern, field names,
-CSRF token mechanism, and `/Date(ms)/` format apply to all 17. The only
+All 25 municipalities use the same platform. The endpoint pattern, field names,
+CSRF token mechanism, and `/Date(ms)/` format apply to all 25. The only
 per-municipality variable is the MODULE_GUID.
 
 ---
@@ -152,7 +152,7 @@ per-municipality variable is the MODULE_GUID.
 - [ ] **robots.txt** — load in browser, record contents
 - [x] **Second municipality** — Brampton confirmed 2026-06-08:
       GUID `1a0b8c31-b337-4cba-b5c4-db8e6c14d026`, identical URL structure and params.
-      "One collector, 17 sources" design validated.
+      "One collector, 25 sources" design validated.
 - [ ] **Pagination** — find a municipality with >100 open tenders, confirm `start=100`
       works correctly
 - [x] **Detail page content** — description is boilerplate even on detail page;

@@ -105,7 +105,7 @@ def post_weekly_report(counts: dict, top_tenders: list[dict]) -> None:
     flagged  = yes_c + maybe_c
     rejected = counts.get("no_count", 0)
 
-    lines = [f"📊 *DLP Weekly Tender Report — {date.today().strftime('%B %d, %Y')}*"]
+    lines = [f"📊 *KDN Weekly Tender Report — {date.today().strftime('%B %d, %Y')}*"]
     lines.append(f"Claude reviewed *{total}* tender{'s' if total != 1 else ''} this week")
     lines.append(
         f"• *{flagged} flagged* ({yes_c} high confidence, {maybe_c} medium confidence)"
@@ -166,7 +166,7 @@ def post_digest(tenders: list[dict]) -> None:
     high = [t for t in tenders if t.get("llm_decision") == "yes"]
     medium = [t for t in tenders if t.get("llm_decision") == "maybe"]
 
-    lines = [f"📋 *DLP Tender Digest — {date.today().strftime('%B %d, %Y')}*"]
+    lines = [f"📋 *KDN Tender Digest — {date.today().strftime('%B %d, %Y')}*"]
     lines.append(f"{len(tenders)} open opportunit{'y' if len(tenders) == 1 else 'ies'} "
                  f"({len(high)} high confidence, {len(medium)} medium)")
     lines.append("")

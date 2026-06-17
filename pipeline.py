@@ -1,5 +1,5 @@
 """
-DLP Tender Monitor — LLM-first pipeline.
+KDN Tender Monitor — LLM-first pipeline.
 
 Architecture:
   collect → store (Neon) → LLM adjudicates every new tender → dashboard
@@ -177,7 +177,7 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="DLP Tender Monitor pipeline (LLM-first)")
+    parser = argparse.ArgumentParser(description="KDN Tender Monitor pipeline (LLM-first)")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Collect and adjudicate but do not write to DB or build dashboard",

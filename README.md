@@ -1,12 +1,12 @@
-# DLP Tender Monitor
+# KDN Tender Monitor
 
-Automated monitor for Diamond Line Painting (DLP) that watches 17 Ontario
-municipal procurement portals, adjudicates each open tender for relevance to
-DLP's services, and publishes a daily dashboard of relevant opportunities.
+Automated monitor for KDN that watches 25 Ontario municipal and regional
+procurement portals, adjudicates each open tender for relevance to KDN's
+services, and publishes a daily dashboard of relevant opportunities.
 
 ## What it does
 
-1. **Collects** open tenders from 17 bids&tenders.ca portals (all same platform — one collector)
+1. **Collects** open tenders from 25 bids&tenders.ca portals (all same platform — one collector)
 2. **Adjudicates** every new tender once with Claude (`src/matching/relevance.py`) → `yes` / `no` / `maybe`
 3. **Publishes** a static HTML dashboard to GitHub Pages — no server required
 
@@ -18,6 +18,7 @@ DLP's services, and publishes a daily dashboard of relevant opportunities.
 
 - No bidding, no form submission, no document downloads, no login
 - Does not cover MERX, City of Ottawa, or City of Toronto (deliberately excluded)
+- Does not cover school boards (deliberately excluded for KDN)
 - Only reads publicly available pages while logged out
 
 ---
@@ -27,8 +28,8 @@ DLP's services, and publishes a daily dashboard of relevant opportunities.
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/eram01-pat/dlp_lead_intake.git
-cd dlp_lead_intake
+git clone https://github.com/eram01-pat/kdn_lead_intake.git
+cd kdn_lead_intake
 pip install -r requirements.txt
 playwright install chromium
 ```
@@ -111,18 +112,35 @@ Relevance is decided by a single Claude call per new tender in
 `config/settings.yaml` (model + max tokens). It runs on **every** new tender — there
 is no keyword pre-filter.
 
-The prompt asks whether the tender is plausibly in scope for Diamond Line Painting's
-services (line painting, pavement marking, sign installation, warehouse/floor marking,
-playground/school-yard, sports-court & field marking, public-road marking, and adjacent
-pavement work) and returns:
+KDN self-performs **pavement markings only**, on public roads and infrastructure
+(municipal roads, regional roads, and highways). The prompt asks whether the tender is
+plausibly in scope for that narrow road-marking work and returns:
 - `yes` → High confidence (main feed)
 - `maybe` → Medium confidence (main feed)
 - `no` → dropped
 
-> Diamond does **not** self-perform power washing / pressure washing / sweeping (that is
-> a separate company, CMW). A washing-only tender is `no`. A tender that bundles Diamond
-> marking/striping/sign/court/floor work *with* washing or sweeping is still relevant —
-> the washing mention alone never forces a `no`.
+**In scope:** road and lane markings (centre/edge lines, longitudinal & transverse),
+crosswalks, stop bars, directional arrows, pavement stencils/legends, bike-lane markings
+and traffic symbols (elephant's feet, shark's teeth); high-visibility, temporary,
+water/oil-based, and thermoplastic/durable traffic markings; and pavement-marking
+removal/obliteration by water blasting, soda blasting, or rotary grinding. Road
+reconstruction / rehabilitation / widening / resurfacing projects are treated as
+`yes`/`maybe` because pavement marking is a standard sub-scope. Parking lots are in
+scope **only** when bundled into a larger road/infrastructure tender.
+
+**Out of scope** (`no`): standalone parking-lot striping; playgrounds / school-yards /
+painted games; sports courts & fields; warehouse / indoor / factory floor marking;
+sign installation or supply; and adjacent pavement work KDN does not self-perform —
+seal coating, crack repair/sealing, asphalt patching/pothole repair, and paving/asphalt
+placement itself (a paving or patching tender with no marking scope is `no`). Generic
+exclusions also apply: interior/building painting & trades, fine-art/mural "line
+painting", snow removal/sweeping and general surface power/pressure washing (distinct
+from water/soda blasting to remove markings, which is in scope), landscaping,
+supply-of-goods-only, and design/engineering/consulting.
+
+MAYBE leads are tagged `[DIRECT]` (road/infrastructure marking explicitly present) or
+`[INFERRED]` (marking likely a sub-scope of a road reconstruction/rehab/widening/
+resurfacing project but not explicitly stated).
 
 ---
 
@@ -144,3 +162,5 @@ is passed in CI).
 - **Email digest**: daily summary of High/Medium matches — thin add-on over same data
 - **LLM detail-page enrichment**: fetch tender detail pages for tenders that only had
   a listing-level description
+</content>
+</invoke>

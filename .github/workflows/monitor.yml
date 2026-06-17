@@ -1,4 +1,4 @@
-name: DLP Tender Monitor
+name: KDN Tender Monitor
 
 on:
   schedule:
@@ -56,7 +56,7 @@ jobs:
       - name: Commit module endpoint cache
         if: github.event.inputs.dry_run != 'true'
         run: |
-          git config user.name  "DLP Tender Bot"
+          git config user.name  "KDN Tender Bot"
           git config user.email "actions@github.com"
           git add data/module_endpoints.yaml
           git diff --cached --quiet || git commit -m "chore: update module_endpoints.yaml [skip ci]"

@@ -1,5 +1,5 @@
 """
-DLP Weekly Tender Report — posts a Friday summary to Slack.
+KDN Weekly Tender Report — posts a Friday summary to Slack.
 
 Run:
   python weekly_report.py

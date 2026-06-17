@@ -17,20 +17,10 @@ sources:
   - {id: newmarket,     name: "Town of Newmarket",      base_url: "https://newmarket.bidsandtenders.ca"}
   - {id: york,          name: "Region of York",         base_url: "https://york.bidsandtenders.ca"}
 
-  # ── School boards (added for DLP — schools = parking lots, playgrounds, ──────
-  #    school-yard games, sports courts, and line painting). All on bids&tenders.
-  #    Note: Peel DSB (public) is on Bonfire, not bids&tenders, so it's not here;
-  #    Dufferin-Peel Catholic (dpcdsb) covers the Catholic schools in Peel.
-  - {id: yrdsb,         name: "York Region DSB",                  base_url: "https://yrdsb.bidsandtenders.ca"}
-  - {id: tdsb,          name: "Toronto DSB",                      base_url: "https://tdsb.bidsandtenders.ca"}
-  - {id: ddsb,          name: "Durham DSB",                       base_url: "https://ddsb.bidsandtenders.ca"}
-  - {id: hdsb,          name: "Halton DSB",                       base_url: "https://hdsb.bidsandtenders.ca"}
-  - {id: hwdsb,         name: "Hamilton-Wentworth DSB",           base_url: "https://hwdsb.bidsandtenders.ca"}
-  - {id: wrdsb,         name: "Waterloo Region DSB",              base_url: "https://wrdsb.bidsandtenders.ca"}
-  - {id: ycdsb,         name: "York Catholic DSB",                base_url: "https://ycdsb.bidsandtenders.ca"}
-  - {id: dpcdsb,        name: "Dufferin-Peel Catholic DSB",       base_url: "https://dpcdsb.bidsandtenders.ca"}
-  - {id: dcdsb,         name: "Durham Catholic DSB",              base_url: "https://dcdsb.bidsandtenders.ca"}
-  - {id: hwcdsb,        name: "Hamilton-Wentworth Catholic DSB",  base_url: "https://hwcdsb.bidsandtenders.ca"}
+  # ── School boards are intentionally EXCLUDED for KDN. ─────────────────────────
+  #    KDN self-performs road/infrastructure pavement marking only and does not bid
+  #    school-board work (that is the sister company's area). No school-board
+  #    sources are listed here by design.
 
   # ── Regional municipalities (regional arterial roads = lane/crosswalk/ ───────
   #    thermoplastic marking). York & Durham regions are already listed above.
