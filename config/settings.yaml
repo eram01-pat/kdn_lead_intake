@@ -1,0 +1,22 @@
+crawl:
+  rate_limit_seconds: 3
+  max_retries: 3
+  backoff_base_seconds: 5
+  timeout_seconds: 30
+  max_per_source: 0
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+  fetch_detail_pages: true
+
+llm:
+  enabled: true
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 150
+
+storage:
+  # db_path unused — Neon connection comes from DATABASE_URL environment variable.
+  db_path: ""
+
+dashboard:
+  output_path: "docs/index.html"
+  closing_soon_days: 14
+  snippet_length: 400

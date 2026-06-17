@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.env
+
+# Keep the DB in the repo (v1 state persistence choice).
+# Remove this line if switching to artifact-based storage.
+# data/tenders.db
+
+# Playwright browser binaries (large; installed by CI)
+# ~/.cache/ms-playwright  (this is outside the repo, no need to gitignore)

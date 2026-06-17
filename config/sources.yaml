@@ -1,0 +1,47 @@
+sources:
+  - {id: vaughan,       name: "City of Vaughan",        base_url: "https://vaughan.bidsandtenders.ca"}
+  - {id: brampton,      name: "City of Brampton",       base_url: "https://brampton.bidsandtenders.ca"}
+  - {id: mississauga,   name: "City of Mississauga",    base_url: "https://mississauga.bidsandtenders.ca"}
+  - {id: whitby,        name: "Town of Whitby",         base_url: "https://whitby.bidsandtenders.ca"}
+  - {id: markham,       name: "City of Markham",        base_url: "https://markham.bidsandtenders.ca"}
+  - {id: burlington,    name: "City of Burlington",     base_url: "https://burlington.bidsandtenders.ca"}
+  - {id: hamilton,      name: "City of Hamilton",       base_url: "https://hamilton.bidsandtenders.ca"}
+  - {id: durham,        name: "Region of Durham",       base_url: "https://durham.bidsandtenders.ca"}
+  - {id: niagarafalls,  name: "City of Niagara Falls",  base_url: "https://niagarafalls.bidsandtenders.ca"}
+  - {id: oakville,      name: "Town of Oakville",       base_url: "https://oakville.bidsandtenders.ca"}
+  - {id: pickering,     name: "City of Pickering",      base_url: "https://pickering.bidsandtenders.ca"}
+  - {id: ajax,          name: "Town of Ajax",           base_url: "https://ajax.bidsandtenders.ca"}
+  - {id: oshawa,        name: "City of Oshawa",         base_url: "https://oshawa.bidsandtenders.ca"}
+  - {id: richmondhill,  name: "City of Richmond Hill",  base_url: "https://richmondhill.bidsandtenders.ca"}
+  - {id: aurora,        name: "Town of Aurora",         base_url: "https://aurora.bidsandtenders.ca"}
+  - {id: newmarket,     name: "Town of Newmarket",      base_url: "https://newmarket.bidsandtenders.ca"}
+  - {id: york,          name: "Region of York",         base_url: "https://york.bidsandtenders.ca"}
+
+  # ── School boards (added for DLP — schools = parking lots, playgrounds, ──────
+  #    school-yard games, sports courts, and line painting). All on bids&tenders.
+  #    Note: Peel DSB (public) is on Bonfire, not bids&tenders, so it's not here;
+  #    Dufferin-Peel Catholic (dpcdsb) covers the Catholic schools in Peel.
+  - {id: yrdsb,         name: "York Region DSB",                  base_url: "https://yrdsb.bidsandtenders.ca"}
+  - {id: tdsb,          name: "Toronto DSB",                      base_url: "https://tdsb.bidsandtenders.ca"}
+  - {id: ddsb,          name: "Durham DSB",                       base_url: "https://ddsb.bidsandtenders.ca"}
+  - {id: hdsb,          name: "Halton DSB",                       base_url: "https://hdsb.bidsandtenders.ca"}
+  - {id: hwdsb,         name: "Hamilton-Wentworth DSB",           base_url: "https://hwdsb.bidsandtenders.ca"}
+  - {id: wrdsb,         name: "Waterloo Region DSB",              base_url: "https://wrdsb.bidsandtenders.ca"}
+  - {id: ycdsb,         name: "York Catholic DSB",                base_url: "https://ycdsb.bidsandtenders.ca"}
+  - {id: dpcdsb,        name: "Dufferin-Peel Catholic DSB",       base_url: "https://dpcdsb.bidsandtenders.ca"}
+  - {id: dcdsb,         name: "Durham Catholic DSB",              base_url: "https://dcdsb.bidsandtenders.ca"}
+  - {id: hwcdsb,        name: "Hamilton-Wentworth Catholic DSB",  base_url: "https://hwcdsb.bidsandtenders.ca"}
+
+  # ── Regional municipalities (regional arterial roads = lane/crosswalk/ ───────
+  #    thermoplastic marking). York & Durham regions are already listed above.
+  - {id: peelregion,     name: "Region of Peel",      base_url: "https://peelregion.bidsandtenders.ca"}
+  - {id: regionofwaterloo, name: "Region of Waterloo", base_url: "https://regionofwaterloo.bidsandtenders.ca"}
+  - {id: haltonregion,   name: "Region of Halton",    base_url: "https://haltonregion.bidsandtenders.ca"}
+
+  # ── Southwestern-Ontario footprint (Waterloo region + Woodstock/Oxford). ─────
+  #    Note: City of Cambridge is on Bonfire, not bids&tenders, so it's not here.
+  - {id: kitchener,      name: "City of Kitchener",   base_url: "https://kitchener.bidsandtenders.ca"}
+  - {id: waterloo,       name: "City of Waterloo",    base_url: "https://waterloo.bidsandtenders.ca"}
+  - {id: guelph,         name: "City of Guelph",      base_url: "https://guelph.bidsandtenders.ca"}
+  - {id: oxfordcounty,   name: "Oxford County",       base_url: "https://oxfordcounty.bidsandtenders.ca"}
+  - {id: haltonhills,    name: "Town of Halton Hills", base_url: "https://haltonhills.bidsandtenders.ca"}

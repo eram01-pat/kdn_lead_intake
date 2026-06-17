@@ -1,0 +1,64 @@
+name: DLP Tender Monitor
+
+on:
+  schedule:
+    # 6:00 AM Eastern on weekdays (10:00 UTC)
+    - cron: "0 10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — collect and match but skip DB write"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "tender-monitor"
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
+
+      - name: Run pipeline
+        env:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:        ${{ secrets.DATABASE_URL }}
+          SLACK_WEBHOOK_URL:   ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN MODE — no DB writes ==="
+            python pipeline.py --dry-run --ignore-errors
+          else
+            python pipeline.py --ignore-errors
+          fi
+
+      - name: Commit module endpoint cache
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name  "DLP Tender Bot"
+          git config user.email "actions@github.com"
+          git add data/module_endpoints.yaml
+          git diff --cached --quiet || git commit -m "chore: update module_endpoints.yaml [skip ci]"
+          git pull --rebase --autostash
+          git push
