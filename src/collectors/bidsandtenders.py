@@ -1,7 +1,7 @@
 """
 Parameterized collector for the bids&tenders.ca (eSolutionsGroup) platform.
 
-All 17 municipalities share this one collector — only base_url differs.
+All 25 municipalities share this one collector — only base_url differs.
 
 The platform requires JavaScript execution before the search AJAX call will
 succeed (JS sets additional cookies / prepares state). We use Playwright
