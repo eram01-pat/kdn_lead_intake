@@ -221,6 +221,101 @@ def _discover_contracts(page) -> list[str]:
     return links
 
 
+# ── Region selection (the map shows ONE region's contracts at a time) ─────────
+
+def _id_of(url: str) -> str:
+    m = _CONTRACT_ID_RE.search(url)
+    return m.group(1) if m else url
+
+
+def _id_set(page) -> set[str]:
+    return {_id_of(u) for u in _collect_contract_links(page)}
+
+
+def _describe(el) -> str:
+    try:
+        return el.evaluate(
+            "e => { const o=(e.getAttribute('onclick')||''); "
+            "return e.tagName+' href='+(e.getAttribute('href')||'')"
+            "+' onclick='+o.slice(0,80)+' title='+(e.getAttribute('title')||''); }"
+        )
+    except Exception:
+        return "?"
+
+
+def _dump_region_candidates(page, region: str) -> None:
+    """Log the elements that carry a region's name so we can target the control."""
+    try:
+        cands = page.evaluate(
+            "(name) => Array.from(document.querySelectorAll('a,area,button,span,td,div,li'))"
+            " .filter(e => (e.textContent||'').trim()===name"
+            "   || (e.getAttribute('alt')||'')===name || (e.getAttribute('title')||'')===name)"
+            " .slice(0,8)"
+            " .map(e => e.tagName+' href='+(e.getAttribute('href')||'')"
+            "   +' onclick='+((e.getAttribute('onclick')||'').slice(0,80))"
+            "   +' title='+(e.getAttribute('title')||'')+' alt='+(e.getAttribute('alt')||''))",
+            region,
+        )
+        logger.warning("RAQS REGION DIAG [%s]: candidates=%s", region, cands)
+    except Exception as exc:
+        logger.warning("RAQS REGION DIAG [%s]: probe failed: %s", region, exc)
+
+
+def _click_region_control(page, region: str) -> tuple[bool, str]:
+    """Try several strategies to click a region's control. Returns (clicked, info)."""
+    strategies = [
+        ("role=link",  lambda: page.get_by_role("link", name=region, exact=True)),
+        ("text-exact", lambda: page.get_by_text(region, exact=True)),
+        ("area",       lambda: page.locator(f"area[alt='{region}'], area[title='{region}']")),
+        ("a[title]",   lambda: page.locator(f"a[title='{region}']")),
+        ("a:has-text", lambda: page.locator(f"a:has-text('{region}')")),
+    ]
+    for name, factory in strategies:
+        try:
+            loc = factory()
+            cnt = loc.count()
+        except Exception as exc:
+            logger.debug("RAQS: region %s strategy %s errored: %s", region, name, exc)
+            continue
+        if cnt == 0:
+            continue
+        el = loc.first
+        info = f"{name}(n={cnt}): {_describe(el)}"
+        try:
+            el.click(timeout=5000)
+            return True, info
+        except Exception as exc:
+            logger.debug("RAQS: region %s click via %s failed: %s", region, name, exc)
+    _dump_region_candidates(page, region)
+    return False, "no-control"
+
+
+def _select_region(page, region: str, max_wait_s: float = 10.0) -> list[str]:
+    """
+    Click a region's control and wait for the contract table to actually swap
+    (its contract-id set must change), then return that region's contract links.
+    """
+    before = _id_set(page)
+    clicked, info = _click_region_control(page, region)
+    logger.info("RAQS: region %r control=[%s] clicked=%s", region, info, clicked)
+    if not clicked:
+        return []
+    waited = 0.0
+    while waited < max_wait_s:
+        try:
+            page.wait_for_load_state("networkidle", timeout=2000)
+        except Exception:
+            pass
+        urls = _collect_contract_links(page)
+        if {_id_of(u) for u in urls} != before:
+            logger.info("RAQS: region %r loaded %d contracts", region, len(urls))
+            return urls
+        time.sleep(1.0)
+        waited += 1.0
+    logger.warning("RAQS: region %r table did not change after click (still %d ids)", region, len(before))
+    return _collect_contract_links(page)
+
+
 def _dump_diagnostics(page, label: str) -> None:
     """Log the live page structure (used only when discovery finds nothing)."""
     try:
@@ -383,16 +478,28 @@ def collect_raqs(
             browser.close()
             raise RuntimeError("RAQS contracts map page failed to load")
 
-        # The map lists every open contract in one table (region tabs don't
-        # filter). Discover all contract links, then read each detail page.
-        contract_urls = _discover_contracts(page)
+        # The map shows ONE region's contracts at a time (default = Northwestern).
+        # Capture the default set, then click each requested region (waiting for
+        # the table to actually swap) and union everything. Region is verified
+        # per-contract from the detail page below, so the union is just coverage.
+        url_by_id: dict[str, str] = {}
+        for u in _discover_contracts(page):
+            url_by_id.setdefault(_id_of(u), u)
+        for region in regions:
+            try:
+                for u in _select_region(page, region):
+                    url_by_id.setdefault(_id_of(u), u)
+            except Exception as exc:
+                logger.error("RAQS: region %s selection failed: %s", region, exc)
+
+        contract_urls = list(url_by_id.values())
         if not contract_urls:
             logger.warning("RAQS: no contract rows found on the map")
             _dump_diagnostics(page, "no-contracts")
             browser.close()
             return []
 
-        logger.info("RAQS: %d contracts on the map; reading detail pages", len(contract_urls))
+        logger.info("RAQS: %d unique contracts discovered; reading detail pages", len(contract_urls))
 
         skipped_region = 0
         for url in contract_urls:
