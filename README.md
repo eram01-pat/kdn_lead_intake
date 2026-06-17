@@ -131,8 +131,9 @@ scope **only** when bundled into a larger road/infrastructure tender.
 **Out of scope** (`no`): standalone parking-lot striping; playgrounds / school-yards /
 painted games; sports courts & fields; warehouse / indoor / factory floor marking;
 sign installation or supply; and adjacent pavement work KDN does not self-perform —
-seal coating, crack repair/sealing, asphalt patching/pothole repair, and paving/asphalt
-placement itself (a paving or patching tender with no marking scope is `no`). Generic
+seal coating, crack repair/sealing (incl. rout & seal), asphalt patching/pothole repair,
+concrete diamond grinding/grooving (surface texturing, not marking removal), and
+paving/asphalt placement itself (such a tender with no marking scope is `no`). Generic
 exclusions also apply: interior/building painting & trades, fine-art/mural "line
 painting", snow removal/sweeping and general surface power/pressure washing (distinct
 from water/soda blasting to remove markings, which is in scope), landscaping,

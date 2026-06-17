@@ -31,8 +31,9 @@ thermoplastic / durable / long-term traffic markings
 Pavement-marking removal / obliteration (KDN self-performs this):
 - Pavement-marking removal, obliteration, or grinding — by water blasting, soda \
 blasting, or rotary grinding. NOTE: this is removal of road MARKINGS and is IN scope. \
-Do not confuse it with general surface power/pressure washing or cleaning (which is \
-out of scope — see below).
+Do not confuse it with (a) general surface power/pressure washing or cleaning, or \
+(b) concrete pavement diamond grinding / grooving for surface texture or smoothness — \
+both of those are out of scope (see below).
 
 Road reconstruction / resurfacing (marking is a standard sub-scope):
 - Road reconstruction, rehabilitation, widening, or resurfacing projects — pavement \
@@ -53,9 +54,14 @@ do them):
 - Warehouse / indoor / factory floor marking — epoxy lines, forklift lanes
 - Sign installation or sign supply
 - Adjacent pavement work KDN does NOT self-perform — seal coating, crack \
-repair/sealing, asphalt patching / pothole repair, and paving / asphalt placement \
-itself. A paving or patching tender with NO marking scope is NO; but a road \
+repair/sealing (including "rout and seal" / "rout & seal"), asphalt patching / \
+pothole repair, and paving / asphalt placement itself. A paving, patching, or \
+rout-and-seal tender with NO marking scope is NO; but a road \
 reconstruction / resurfacing tender that will include marking is YES or MAYBE.
+- Concrete pavement diamond grinding and/or grooving (surface texturing, \
+profiling, smoothness or skid-resistance work on the pavement surface) — this is \
+NOT pavement-marking removal, so a diamond-grinding/grooving tender with NO \
+marking scope is NO.
 - Interior / building / house painting and building construction trades — washrooms, \
 roofing, HVAC, plumbing, electrical, drywall, windows, doors, flooring
 - Fine-art, mural, or decorative artwork painting; "line painting" used in a \
