@@ -368,6 +368,39 @@ def _scrape_detail(page, detail_url: str, timeout_ms: int) -> dict:
     }
 
 
+def _format_highway(raw: str) -> str:
+    """
+    Return a display string like "Hwy 401" / "Hwy 413, 410" / "QEW" for a value
+    that is a plausible Ontario highway designation, else "" (so the caller can
+    fall back to the Location text). The RAQS "Highway" field sometimes holds a
+    non-highway value (e.g. "1" or a GWP number like "7317"); those are rejected.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    tokens: list[str] = []
+    for part in re.split(r"[,/&]| and ", raw):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.fullmatch(r"(?:Hwy\.?\s*|Highway\s*)?(QEW|\d{1,3}[A-Za-z]?)", part, re.IGNORECASE)
+        if not m:
+            return ""
+        tok = m.group(1).upper()
+        if tok != "QEW":
+            num = int(re.match(r"\d+", tok).group())
+            # Signed Ontario provincial highways run roughly 2–148, 400-series,
+            # and 500–699 secondaries. Reject 0/1 and 4+ digit GWP numbers.
+            if not (2 <= num <= 699):
+                return ""
+        tokens.append(tok)
+    if not tokens:
+        return ""
+    if tokens == ["QEW"]:
+        return "QEW"
+    return "Hwy " + ", ".join(tokens)
+
+
 def _build_tender(fields: dict, detail_url: str, source_id: str) -> Optional[Tender]:
     contract_no = fields.get("contract_no", "").strip()
     if not contract_no:
@@ -386,10 +419,18 @@ def _build_tender(fields: dict, detail_url: str, source_id: str) -> Optional[Ten
     contract_type = fields.get("contract_type", "").strip()
 
     # title: "<Contract No> — <Hwy N | Location> — <short scope>".
-    # Classification of Work is a qualification table here, not a clean value, so
-    # it is deliberately not used in the title (see module TODO).
-    where = f"Hwy {highway}" if highway and highway not in ("0", "0 ") else location
-    where = where.strip()[:50]
+    # Use the Highway field only when it's a recognizable highway designation;
+    # otherwise fall back to the Location text (the Highway field occasionally
+    # holds a non-highway value like "1" or a GWP number). Classification of Work
+    # is a qualification table here, not a clean value, so it is not used (see TODO).
+    where = _format_highway(highway)
+    if not where:
+        if highway:
+            logger.info(
+                "RAQS: %s highway=%r not a recognized designation; using location",
+                contract_no, highway,
+            )
+        where = location.strip()[:60]
     title_bits = [contract_no]
     if where:
         title_bits.append(where)
