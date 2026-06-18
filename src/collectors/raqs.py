@@ -368,12 +368,12 @@ def _scrape_detail(page, detail_url: str, timeout_ms: int) -> dict:
     }
 
 
-def _format_highway(raw: str) -> str:
+def _valid_highway(raw: str) -> str:
     """
-    Return a display string like "Hwy 401" / "Hwy 413, 410" / "QEW" for a value
-    that is a plausible Ontario highway designation, else "" (so the caller can
-    fall back to the Location text). The RAQS "Highway" field sometimes holds a
-    non-highway value (e.g. "1" or a GWP number like "7317"); those are rejected.
+    Return a normalized Ontario highway designation ("401", "413, 410", "QEW")
+    when `raw` is a plausible one, else "". The RAQS "Highway" field sometimes
+    holds a non-highway value (e.g. "1" or a GWP number like "7317"); those are
+    rejected so they don't leak into the title or the description.
     """
     raw = (raw or "").strip()
     if not raw:
@@ -394,11 +394,14 @@ def _format_highway(raw: str) -> str:
             if not (2 <= num <= 699):
                 return ""
         tokens.append(tok)
-    if not tokens:
+    return ", ".join(tokens)
+
+
+def _highway_label(hwy: str) -> str:
+    """Display form of a normalized highway: 'QEW' as-is, else 'Hwy <n>'."""
+    if not hwy:
         return ""
-    if tokens == ["QEW"]:
-        return "QEW"
-    return "Hwy " + ", ".join(tokens)
+    return hwy if hwy == "QEW" else f"Hwy {hwy}"
 
 
 def _build_tender(fields: dict, detail_url: str, source_id: str) -> Optional[Tender]:
@@ -423,14 +426,13 @@ def _build_tender(fields: dict, detail_url: str, source_id: str) -> Optional[Ten
     # otherwise fall back to the Location text (the Highway field occasionally
     # holds a non-highway value like "1" or a GWP number). Classification of Work
     # is a qualification table here, not a clean value, so it is not used (see TODO).
-    where = _format_highway(highway)
-    if not where:
-        if highway:
-            logger.info(
-                "RAQS: %s highway=%r not a recognized designation; using location",
-                contract_no, highway,
-            )
-        where = location.strip()[:60]
+    hwy = _valid_highway(highway)
+    if not hwy and highway:
+        logger.info(
+            "RAQS: %s highway=%r not a recognized designation; using location",
+            contract_no, highway,
+        )
+    where = _highway_label(hwy) or location.strip()[:60]
     title_bits = [contract_no]
     if where:
         title_bits.append(where)
@@ -439,14 +441,15 @@ def _build_tender(fields: dict, detail_url: str, source_id: str) -> Optional[Ten
     title = " — ".join(title_bits)
 
     # description passed to Claude + surfaced in Slack: scope is the primary signal,
-    # location/highway/length let a human make the Eastern distance call.
+    # location/highway/length let a human make the Eastern distance call. Only a
+    # validated highway is included so a junk value (e.g. "7317") never leaks here.
     desc_parts = []
     if scope:
         desc_parts.append(scope)
     if location:
         desc_parts.append(f"Location: {location}")
-    if highway:
-        desc_parts.append(f"Highway: {highway}")
+    if hwy:
+        desc_parts.append(f"Highway: {hwy}")
     if length:
         desc_parts.append(f"Length: {length}")
     desc_parts.append(f"Region: {region}")
