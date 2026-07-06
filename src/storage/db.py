@@ -177,11 +177,14 @@ def get_weekly_stats(conn: PgConn) -> dict:
         )
         counts = dict(cur.fetchone())
 
+        # status = 'Open' can be stale — rows are only updated when the scraper
+        # re-sees a tender — so also require the closing date to not have passed.
         cur.execute(
             """SELECT title, source_name, detail_url, closing_date, llm_decision, llm_reason
             FROM tenders
             WHERE status = 'Open'
               AND llm_decision IN ('yes', 'maybe')
+              AND (closing_date IS NULL OR closing_date >= CURRENT_DATE)
             ORDER BY
                 CASE llm_decision WHEN 'yes' THEN 0 ELSE 1 END,
                 closing_date ASC NULLS LAST
