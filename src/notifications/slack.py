@@ -128,6 +128,8 @@ def post_weekly_report(counts: dict, top_tenders: list[dict]) -> None:
             emoji = "🟢" if t.get("llm_decision") == "yes" else "🟡"
             if days is None:
                 deadline = "no closing date"
+            elif days < 0:
+                deadline = f"closed {t['closing_date']}"
             elif days == 0:
                 deadline = "⏳ closes TODAY"
             elif days <= CLOSING_SOON_DAYS:
