@@ -131,60 +131,62 @@ def _decode_search_payload(post_data: Optional[str]) -> tuple[Any, str]:
     return {k: v[0] for k, v in parsed.items()}, "form"
 
 
-def _locate_paging_field(payload: Any) -> tuple[Optional[dict], Optional[str], str]:
+def _apply_paging(payload: Any, page_no: int, page_size: int) -> bool:
     """
-    Depth-first search of a decoded payload for a recognizable paging field.
-    Returns (containing_dict, key, style) where style is 'number' or 'offset';
-    (None, None, '') if no paging field is found.
+    Recursively set every recognizable paging field in a decoded payload to
+    request page `page_no` (1-based). Sets ALL matching fields — e.g. a
+    Kendo-style request carries both page=N and skip=M, and they must stay
+    consistent. Returns True if at least one field was set.
     """
+    found = False
     if isinstance(payload, dict):
-        for key in payload:
+        for key, value in payload.items():
             norm = key.lower().replace("_", "").replace("-", "")
             if norm in _PAGE_NUMBER_KEYS:
-                return payload, key, "number"
-            if norm in _PAGE_OFFSET_KEYS:
-                return payload, key, "offset"
-        for value in payload.values():
-            found = _locate_paging_field(value)
-            if found[1]:
-                return found
+                # Respect the site's numbering base: first page captured as 0 → 0-based.
+                try:
+                    zero_based = int(str(value)) == 0
+                except (TypeError, ValueError):
+                    zero_based = False
+                new_value: Any = page_no - 1 if zero_based else page_no
+                payload[key] = str(new_value) if isinstance(value, str) else new_value
+                found = True
+            elif norm in _PAGE_OFFSET_KEYS:
+                new_value = (page_no - 1) * page_size
+                payload[key] = str(new_value) if isinstance(value, str) else new_value
+                found = True
+            else:
+                found = _apply_paging(value, page_no, page_size) or found
     elif isinstance(payload, list):
         for value in payload:
-            found = _locate_paging_field(value)
-            if found[1]:
-                return found
-    return None, None, ""
+            found = _apply_paging(value, page_no, page_size) or found
+    return found
 
 
-def _build_page_payload(post_data: str, page_no: int, page_size: int) -> Optional[str]:
+def _build_page_request(
+    url: str, post_data: str, page_no: int, page_size: int
+) -> Optional[tuple[str, str]]:
     """
-    Rewrite the captured first-page search POST body to request page `page_no`
-    (1-based). Returns the re-serialized body, or None if the payload has no
-    recognizable paging field.
+    Rewrite the captured first-page search request to ask for page `page_no`
+    (1-based). The paging fields may live in the URL query string (Kendo-style
+    ?page=1&skip=0&take=25) or in the POST body. Returns (url, body), or None
+    if neither carries a recognizable paging field.
     """
+    from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    if parts.query:
+        params = {
+            k: v[0] for k, v in parse_qs(parts.query, keep_blank_values=True).items()
+        }
+        if _apply_paging(params, page_no, page_size):
+            return urlunsplit(parts._replace(query=urlencode(params))), post_data
+
     payload, kind = _decode_search_payload(post_data)
-    if payload is None:
-        return None
-    container, key, style = _locate_paging_field(payload)
-    if not key:
-        return None
-
-    original = container[key]
-    if style == "offset":
-        new_value: Any = (page_no - 1) * page_size
-    else:
-        # Respect the site's numbering base: first page captured as 0 → 0-based.
-        try:
-            zero_based = int(str(original)) == 0
-        except ValueError:
-            zero_based = False
-        new_value = page_no - 1 if zero_based else page_no
-    container[key] = str(new_value) if isinstance(original, str) else new_value
-
-    if kind == "json":
-        return json.dumps(payload)
-    from urllib.parse import urlencode
-    return urlencode(payload)
+    if payload is not None and _apply_paging(payload, page_no, page_size):
+        body = json.dumps(payload) if kind == "json" else urlencode(payload)
+        return url, body
+    return None
 
 
 # ── Playwright search ─────────────────────────────────────────────────────────
@@ -194,8 +196,90 @@ _FETCH_PAGE_JS = """async ([url, body, contentType]) => {
     if (contentType) headers['Content-Type'] = contentType;
     const resp = await fetch(url, {method: 'POST', headers, body, credentials: 'include'});
     if (!resp.ok) return {error: 'HTTP ' + resp.status};
-    return await resp.json();
+    await resp.text();  // consume; the response listener captures the items
+    return {ok: true};
 }"""
+
+# Candidate selectors for the listing's next-page control, tried in order.
+# Covers PagedList (ASP.NET), Kendo UI pagers, Bootstrap pagination, and
+# generic "Next" / "Load More" buttons.
+_NEXT_PAGE_SELECTORS = [
+    "li.PagedList-skipToNext a",
+    "a[rel='next']",
+    "a[aria-label='Next']",
+    "a[aria-label='Next page']",
+    "a[aria-label='Go to the next page']",
+    "a.k-link[title='Go to the next page']",
+    "li.next:not(.disabled) a",
+    "button[aria-label*='Next']",
+    "a:has-text('Next')",
+    "button:has-text('Next')",
+    "a:has-text('»')",
+    "button:has-text('Load More')",
+    "a:has-text('Load More')",
+]
+
+# Diagnostic dump of pagination-ish markup, logged when no control matches so
+# the real structure can be identified from CI logs.
+_PAGER_MARKUP_JS = """() => {
+    const els = document.querySelectorAll(
+        "[class*='pag' i], [id*='pag' i], .k-pager-wrap, nav ul");
+    return Array.from(els).slice(0, 5)
+        .map(e => e.outerHTML.slice(0, 300)).join('\\n---\\n');
+}"""
+
+
+def _click_through_pages(
+    page, source_id: str, total: int, count_items, rate_limit_seconds: float
+) -> None:
+    """
+    Drive the listing's own pagination UI: click the next-page control and let
+    the response listener capture each page's AJAX response. Works regardless
+    of how the request encodes the page number.
+    """
+    clicks = 0
+    while count_items() < total and clicks < _MAX_SEARCH_PAGES:
+        target = None
+        for sel in _NEXT_PAGE_SELECTORS:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible():
+                    target = loc
+                    break
+            except Exception:
+                continue
+        if target is None:
+            try:
+                markup = page.evaluate(_PAGER_MARKUP_JS)
+            except Exception:
+                markup = ""
+            logger.warning(
+                "%s: no next-page control recognized — candidate pager markup:\n%s",
+                source_id, (markup or "(none found)")[:2000],
+            )
+            return
+        before = count_items()
+        try:
+            with page.expect_response(
+                lambda r: "/Tender/Search/" in r.url and r.request.method == "POST",
+                timeout=15_000,
+            ):
+                target.click()
+            page.wait_for_timeout(500)  # let the response listener process the body
+        except Exception as exc:
+            logger.warning("%s: next-page click failed: %s", source_id, exc)
+            return
+        if count_items() <= before:
+            logger.warning(
+                "%s: next-page click produced no new items — stopping", source_id
+            )
+            return
+        clicks += 1
+        logger.info(
+            "%s: clicked to page %d: %d/%d items",
+            source_id, clicks + 1, count_items(), total,
+        )
+        time.sleep(rate_limit_seconds)
 
 
 def _fetch_via_playwright(
@@ -214,6 +298,7 @@ def _fetch_via_playwright(
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
     all_items: list[dict] = []
+    seen_ids: set[str] = set()
     guid_found: list[str] = []
     search_request: dict = {}   # url / post_data / content_type of the first search POST
     total_reported: list[int] = [0]
@@ -223,6 +308,9 @@ def _fetch_via_playwright(
         ctx = browser.new_context(user_agent=user_agent)
         page = ctx.new_page()
 
+        # Accumulates every search AJAX response — the initial page load, our
+        # replayed page fetches, and UI-driven pagination alike. Dedupes by
+        # platform Id so re-requests of an already-seen page are harmless.
         def on_response(response):
             url = response.url
             if "/Tender/Search/" in url and response.request.method == "POST":
@@ -237,8 +325,10 @@ def _fetch_via_playwright(
                         total_reported[0] = max(total_reported[0], int(body.get("total") or 0))
                     except (TypeError, ValueError):
                         pass
-                    if items:
-                        all_items.extend(items)
+                    new_items = [it for it in items if str(it.get("Id")) not in seen_ids]
+                    if new_items:
+                        seen_ids.update(str(it.get("Id")) for it in new_items)
+                        all_items.extend(new_items)
                         if not search_request:
                             search_request.update(
                                 url=url,
@@ -247,7 +337,7 @@ def _fetch_via_playwright(
                             )
                         logger.info(
                             "%s: captured %d items (total reported: %s)",
-                            source_id, len(items), body.get("total"),
+                            source_id, len(new_items), body.get("total"),
                         )
                 except Exception as exc:
                     logger.debug("%s: could not parse AJAX response: %s", source_id, exc)
@@ -264,28 +354,30 @@ def _fetch_via_playwright(
         except PWTimeout:
             logger.warning("%s: page load timed out — using whatever was captured", source_id)
 
-        # The listing AJAX returns one page (25 items). Replay the search POST
-        # with an incremented page parameter until every reported item is in hand.
-        page.remove_listener("response", on_response)  # avoid double-counting replays
+        # The listing AJAX returns one page (25 items). First try replaying the
+        # search request with an incremented page parameter (in the URL query
+        # or POST body); if the request carries no recognizable paging field,
+        # fall back to clicking the listing's own next-page control.
         total = total_reported[0]
         if all_items and total > len(all_items) and search_request:
             page_size = len(all_items)
-            seen_ids = {str(it.get("Id")) for it in all_items}
             page_no = 2
             while len(all_items) < total and page_no <= _MAX_SEARCH_PAGES:
-                body_payload = _build_page_payload(
-                    search_request["post_data"], page_no, page_size
+                paged = _build_page_request(
+                    search_request["url"], search_request["post_data"], page_no, page_size
                 )
-                if body_payload is None:
-                    logger.warning(
-                        "%s: no paging field recognized in search payload %r — cannot paginate",
-                        source_id, search_request["post_data"][:200],
+                if paged is None:
+                    logger.info(
+                        "%s: no paging field in search request (url: %s) — "
+                        "falling back to UI pagination",
+                        source_id, search_request["url"][:200],
                     )
                     break
+                before = len(all_items)
                 try:
                     result = page.evaluate(
                         _FETCH_PAGE_JS,
-                        [search_request["url"], body_payload, search_request["content_type"]],
+                        [paged[0], paged[1], search_request["content_type"]],
                     )
                 except Exception as exc:
                     logger.warning("%s: page %d fetch failed: %s", source_id, page_no, exc)
@@ -296,23 +388,22 @@ def _fetch_via_playwright(
                         result.get("error") if isinstance(result, dict) else type(result),
                     )
                     break
-                items = result.get("data") or []
-                new_items = [it for it in items if str(it.get("Id")) not in seen_ids]
-                if not new_items:
+                page.wait_for_timeout(500)  # let the response listener process the body
+                if len(all_items) <= before:
                     logger.warning(
-                        "%s: page %d returned no new items — stopping pagination",
+                        "%s: replayed page %d returned no new items — stopping replay",
                         source_id, page_no,
                     )
                     break
-                all_items.extend(new_items)
-                seen_ids.update(str(it.get("Id")) for it in new_items)
-                logger.info(
-                    "%s: page %d: captured %d more items (%d/%d)",
-                    source_id, page_no, len(new_items), len(all_items), total,
-                )
                 page_no += 1
                 time.sleep(rate_limit_seconds)
 
+            if len(all_items) < total:
+                _click_through_pages(
+                    page, source_id, total, lambda: len(all_items), rate_limit_seconds
+                )
+
+        page.remove_listener("response", on_response)
         pw_cookies = {c["name"]: c["value"] for c in ctx.cookies()}
         browser.close()
 
