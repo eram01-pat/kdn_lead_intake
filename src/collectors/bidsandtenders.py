@@ -6,10 +6,14 @@ All 25 municipalities share this one collector — only base_url differs.
 The platform requires JavaScript execution before the search AJAX call will
 succeed (JS sets additional cookies / prepares state). We use Playwright
 (headless Chromium) to load the listing page once, intercept the AJAX
-response, and capture the JSON. Subsequent detail-page fetches use requests.
+response, and capture the JSON. The search endpoint returns 25 items per
+page, so when the reported total exceeds the first page we replay the same
+search POST from inside the page with an incremented page parameter until
+every item is captured. Subsequent detail-page fetches use requests.
 """
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -30,7 +34,7 @@ logger = logging.getLogger(__name__)
 _LISTING_PATH = "/Module/Tenders/en"
 _DETAIL_PATH  = "/Module/Tenders/en/Tender/Detail"
 _CACHE_FILE   = "data/module_endpoints.yaml"
-_PAGE_LIMIT   = 100
+_MAX_SEARCH_PAGES = 40  # safety cap on pagination requests per source
 
 _REF_PREFIX_RE = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
 _GUID_RE       = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
@@ -101,7 +105,98 @@ def _save_cache(cache: dict) -> None:
     Path(_CACHE_FILE).write_text(yaml.dump(cache, default_flow_style=False))
 
 
+# ── Search pagination helpers ─────────────────────────────────────────────────
+
+_PAGE_NUMBER_KEYS = {"page", "pagenumber", "pagenum", "currentpage", "pageindex"}
+_PAGE_OFFSET_KEYS = {"start", "skip", "offset", "startindex"}
+
+
+def _decode_search_payload(post_data: Optional[str]) -> tuple[Any, str]:
+    """
+    Decode a captured search POST body.
+    Returns (payload, kind) where kind is 'json' or 'form'; (None, '') if
+    the body can't be decoded.
+    """
+    if not post_data:
+        return None, ""
+    try:
+        return json.loads(post_data), "json"
+    except ValueError:
+        pass
+    from urllib.parse import parse_qs
+    try:
+        parsed = parse_qs(post_data, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None, ""
+    return {k: v[0] for k, v in parsed.items()}, "form"
+
+
+def _locate_paging_field(payload: Any) -> tuple[Optional[dict], Optional[str], str]:
+    """
+    Depth-first search of a decoded payload for a recognizable paging field.
+    Returns (containing_dict, key, style) where style is 'number' or 'offset';
+    (None, None, '') if no paging field is found.
+    """
+    if isinstance(payload, dict):
+        for key in payload:
+            norm = key.lower().replace("_", "").replace("-", "")
+            if norm in _PAGE_NUMBER_KEYS:
+                return payload, key, "number"
+            if norm in _PAGE_OFFSET_KEYS:
+                return payload, key, "offset"
+        for value in payload.values():
+            found = _locate_paging_field(value)
+            if found[1]:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _locate_paging_field(value)
+            if found[1]:
+                return found
+    return None, None, ""
+
+
+def _build_page_payload(post_data: str, page_no: int, page_size: int) -> Optional[str]:
+    """
+    Rewrite the captured first-page search POST body to request page `page_no`
+    (1-based). Returns the re-serialized body, or None if the payload has no
+    recognizable paging field.
+    """
+    payload, kind = _decode_search_payload(post_data)
+    if payload is None:
+        return None
+    container, key, style = _locate_paging_field(payload)
+    if not key:
+        return None
+
+    original = container[key]
+    if style == "offset":
+        new_value: Any = (page_no - 1) * page_size
+    else:
+        # Respect the site's numbering base: first page captured as 0 → 0-based.
+        try:
+            zero_based = int(str(original)) == 0
+        except ValueError:
+            zero_based = False
+        new_value = page_no - 1 if zero_based else page_no
+    container[key] = str(new_value) if isinstance(original, str) else new_value
+
+    if kind == "json":
+        return json.dumps(payload)
+    from urllib.parse import urlencode
+    return urlencode(payload)
+
+
 # ── Playwright search ─────────────────────────────────────────────────────────
+
+_FETCH_PAGE_JS = """async ([url, body, contentType]) => {
+    const headers = {'X-Requested-With': 'XMLHttpRequest'};
+    if (contentType) headers['Content-Type'] = contentType;
+    const resp = await fetch(url, {method: 'POST', headers, body, credentials: 'include'});
+    if (!resp.ok) return {error: 'HTTP ' + resp.status};
+    return await resp.json();
+}"""
+
 
 def _fetch_via_playwright(
     base_url: str,
@@ -109,15 +204,19 @@ def _fetch_via_playwright(
     user_agent: str,
     timeout_seconds: int,
     max_per_source: int,
+    rate_limit_seconds: float,
 ) -> tuple[list[dict], str, dict]:
     """
     Load the listing page in headless Chromium, intercept every AJAX search
-    response, and return (raw_items, module_guid, cookies_dict).
+    response, page through any remaining results, and return
+    (raw_items, module_guid, cookies_dict).
     """
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
     all_items: list[dict] = []
     guid_found: list[str] = []
+    search_request: dict = {}   # url / post_data / content_type of the first search POST
+    total_reported: list[int] = [0]
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -134,8 +233,18 @@ def _fetch_via_playwright(
                 try:
                     body = response.json()
                     items = body.get("data") or []
+                    try:
+                        total_reported[0] = max(total_reported[0], int(body.get("total") or 0))
+                    except (TypeError, ValueError):
+                        pass
                     if items:
                         all_items.extend(items)
+                        if not search_request:
+                            search_request.update(
+                                url=url,
+                                post_data=response.request.post_data or "",
+                                content_type=response.request.headers.get("content-type", ""),
+                            )
                         logger.info(
                             "%s: captured %d items (total reported: %s)",
                             source_id, len(items), body.get("total"),
@@ -155,8 +264,63 @@ def _fetch_via_playwright(
         except PWTimeout:
             logger.warning("%s: page load timed out — using whatever was captured", source_id)
 
+        # The listing AJAX returns one page (25 items). Replay the search POST
+        # with an incremented page parameter until every reported item is in hand.
+        page.remove_listener("response", on_response)  # avoid double-counting replays
+        total = total_reported[0]
+        if all_items and total > len(all_items) and search_request:
+            page_size = len(all_items)
+            seen_ids = {str(it.get("Id")) for it in all_items}
+            page_no = 2
+            while len(all_items) < total and page_no <= _MAX_SEARCH_PAGES:
+                body_payload = _build_page_payload(
+                    search_request["post_data"], page_no, page_size
+                )
+                if body_payload is None:
+                    logger.warning(
+                        "%s: no paging field recognized in search payload %r — cannot paginate",
+                        source_id, search_request["post_data"][:200],
+                    )
+                    break
+                try:
+                    result = page.evaluate(
+                        _FETCH_PAGE_JS,
+                        [search_request["url"], body_payload, search_request["content_type"]],
+                    )
+                except Exception as exc:
+                    logger.warning("%s: page %d fetch failed: %s", source_id, page_no, exc)
+                    break
+                if not isinstance(result, dict) or result.get("error"):
+                    logger.warning(
+                        "%s: page %d fetch returned %s", source_id, page_no,
+                        result.get("error") if isinstance(result, dict) else type(result),
+                    )
+                    break
+                items = result.get("data") or []
+                new_items = [it for it in items if str(it.get("Id")) not in seen_ids]
+                if not new_items:
+                    logger.warning(
+                        "%s: page %d returned no new items — stopping pagination",
+                        source_id, page_no,
+                    )
+                    break
+                all_items.extend(new_items)
+                seen_ids.update(str(it.get("Id")) for it in new_items)
+                logger.info(
+                    "%s: page %d: captured %d more items (%d/%d)",
+                    source_id, page_no, len(new_items), len(all_items), total,
+                )
+                page_no += 1
+                time.sleep(rate_limit_seconds)
+
         pw_cookies = {c["name"]: c["value"] for c in ctx.cookies()}
         browser.close()
+
+    if total_reported[0] and len(all_items) < total_reported[0]:
+        logger.warning(
+            "%s: captured only %d of %d reported items — some tenders were NOT collected",
+            source_id, len(all_items), total_reported[0],
+        )
 
     guid = guid_found[0] if guid_found else ""
 
@@ -369,6 +533,7 @@ def collect(
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
             max_per_source=max_per_source,
+            rate_limit_seconds=rate_limit_seconds,
         )
     except Exception as exc:
         logger.error("%s: Playwright fetch failed: %s — skipping", source_name, exc)
