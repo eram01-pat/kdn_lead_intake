@@ -3,10 +3,6 @@ on:
   schedule:
     - cron: '41 2 * * SUN'
   workflow_dispatch:
-  # Temporary: fire one verification run on push (removed after first green run)
-  push:
-    paths:
-      - '.github/workflows/keepalive.yml'
 permissions:
   actions: write
   contents: write
