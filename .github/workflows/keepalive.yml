@@ -1,0 +1,44 @@
+name: keepalive
+on:
+  schedule:
+    - cron: '41 2 * * SUN'
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: write
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # GitHub disables scheduled workflows after 60 days of repository
+      # inactivity. Calling the "enable workflow" API resets that timer, so
+      # this job refreshes every workflow except ones a human disabled
+      # deliberately (state "disabled_manually").
+      - name: Re-enable scheduled workflows via API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.state == "active" or .state == "disabled_inactivity") | "\(.id) \(.path)"' |
+          while read -r id path; do
+            echo "Keeping alive: ${path} (${id})"
+            gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${id}/enable"
+          done
+      # Belt-and-braces: if the default branch itself has gone quiet for more
+      # than 45 days, refresh repository activity with an empty commit.
+      - name: Push empty commit if last commit is older than 45 days
+        run: |
+          last_commit=$(git log -1 --format=%ct)
+          age_days=$(( ( $(date +%s) - last_commit ) / 86400 ))
+          if [ "${age_days}" -gt 45 ]; then
+            echo "Last commit is ${age_days} days old — pushing keepalive commit."
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive — refresh repository activity"
+            git push
+          else
+            echo "Last commit is ${age_days} days old — no empty commit needed."
+          fi
